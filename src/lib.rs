@@ -1,4 +1,4 @@
-use std::{io::{Error, ErrorKind::InvalidData, Read, Write}, sync::Mutex};
+use std::{io::{Error, ErrorKind, Read, Write}, sync::Mutex};
 use byteorder::{ByteOrder, LittleEndian};
 
 // TODO-DW : Add support for direction control?
@@ -13,18 +13,17 @@ impl<'a, T: Read+Write> Lx16aBus<T> {
     }
 
     // Get the "broadcast" servo
-    pub fn broadcast(&'a self) -> Servo<'a, T> {
+    pub fn broadcast(&'a self) -> Lx16a<'a, T> {
         const BROADCAST_ID: u8 = 254;
 
-        Servo::new(BROADCAST_ID, self)
+        Lx16a::new(BROADCAST_ID, self)
     }
 
     // Get an individual servo
-    pub fn servo(&'a self, id: u8) -> Servo<'a, T> {
-        Servo::new(id, self)
+    pub fn servo(&'a self, id: u8) -> Lx16a<'a, T> {
+        Lx16a::new(id, self)
     }
 
-    // TODO: Create status return value
     // Write data
     pub fn write(&self, out_data: &[u8])  -> Result<(), Error> {
         // Get exclusive access to the bus
@@ -53,17 +52,22 @@ impl<'a, T: Read+Write> Lx16aBus<T> {
     }
 }
 
+pub enum Lx16aMode {
+    Servo,       // Servo (position control) mode
+    Speed(i16),  // Speed mode with speed parameter
+}
+
 // Implement interface to one LX-16a servo on a bus.
-pub struct Servo<'a, T: Read+Write> {
+pub struct Lx16a<'a, T: Read+Write> {
     id: u8, 
     bus: &'a Lx16aBus<T>,
 }
 
-impl<'a, T: Read+Write> Servo<'a, T> {
+impl<'a, T: Read+Write> Lx16a<'a, T> {
     // Private new method, used by Lx16aBus.
     // To create a servo, first create an Lx16aBus, then use servo() factory method.
-    fn new(id: u8, bus: &'a Lx16aBus<T>) -> Servo<'a, T> {
-        Servo { id, bus }
+    fn new(id: u8, bus: &'a Lx16aBus<T>) -> Lx16a<'a, T> {
+        Lx16a { id, bus }
     }
 
     // Get the ID associated with this servo
@@ -73,37 +77,34 @@ impl<'a, T: Read+Write> Servo<'a, T> {
 
     // --- Public operations corresponding to servo commands
 
-    // TODO : Move LX16a stuff to its own library crate
-    #[allow(unused)] 
-    pub fn move_time(&self, pos: i16, time_ms: u16) -> Result<(), Error> {
+    pub fn move_time(&self, pos: u16, time_ms: u16) -> Result<(), Error> {
         const SERVO_MOVE_TIME_WRITE: u8 = 1;
 
         let mut params = [0; 4];
-        LittleEndian::write_i16(&mut params[0..2], pos);
+        LittleEndian::write_u16(&mut params[0..2], pos);
         LittleEndian::write_u16(&mut params[2..4], time_ms);
         self.write(self.id, SERVO_MOVE_TIME_WRITE, &params)?;
 
         Ok(())
     }
 
-    #[allow(unused)] 
-    pub fn read_move_time(&self) -> Result<(i16, u16), Error> {
+    pub fn read_move_time(&self) -> Result<(u16, u16), Error> {
         const SERVO_MOVE_TIME_READ: u8 = 2;
 
         let mut rx_buf = [0; 32];
         let params = [];
         let response = self.read(self.id, SERVO_MOVE_TIME_READ, &params, &mut rx_buf, 4)?;
 
-        let pos = LittleEndian::read_i16(&response[0..2]);
+        let pos = LittleEndian::read_u16(&response[0..2]);
         let time_ms = LittleEndian::read_u16(&response[2..4]);
         Ok((pos, time_ms))
     }
     
-    pub fn move_wait(&self, pos: i16, time_ms: u16) -> Result<(), Error> {
+    pub fn move_wait(&self, pos: u16, time_ms: u16) -> Result<(), Error> {
         const SERVO_MOVE_TIME_WAIT_WRITE: u8 = 7;
 
         let mut params = [0; 4];
-        LittleEndian::write_i16(&mut params[0..2], pos);
+        LittleEndian::write_u16(&mut params[0..2], pos);
         LittleEndian::write_u16(&mut params[2..4], time_ms);
         self.write(self.id, SERVO_MOVE_TIME_WAIT_WRITE, &params)?;
 
@@ -111,15 +112,14 @@ impl<'a, T: Read+Write> Servo<'a, T> {
     }
 
     // read_move_wait
-    #[allow(unused)] 
-    pub fn read_move_wait(&self) -> Result<(i16, u16), Error> {
+    pub fn read_move_wait(&self) -> Result<(u16, u16), Error> {
         const SERVO_MOVE_TIME_WAIT_READ: u8 = 8;
 
         let mut rx_buf = [0; 32];
         let params = [];
         let response = self.read(self.id, SERVO_MOVE_TIME_WAIT_READ, &params, &mut rx_buf, 4)?;
 
-        let pos = LittleEndian::read_i16(&response[0..2]);
+        let pos = LittleEndian::read_u16(&response[0..2]);
         let time_ms = LittleEndian::read_u16(&response[2..4]);
         Ok((pos, time_ms))
     }
@@ -133,7 +133,6 @@ impl<'a, T: Read+Write> Servo<'a, T> {
         Ok(())
     }
 
-    #[allow(unused)] 
     pub fn move_stop(&self) -> Result<(), Error> {
         const SERVO_MOVE_STOP: u8 = 12;
 
@@ -143,7 +142,6 @@ impl<'a, T: Read+Write> Servo<'a, T> {
         Ok(())
     }
 
-    #[allow(unused)]
     pub fn set_servo_id(&self, id: u8) -> Result<(), Error> {
         const SERVO_ID_WRITE: u8 = 13;
 
@@ -163,15 +161,117 @@ impl<'a, T: Read+Write> Servo<'a, T> {
         Ok(response[0])
     }
 
-    // TODO-DW : set_angle_offset / SERVO_ANGLE_OFFSET_ADJUST, 17
-    // TODO-DW : save_angle_offset / SERVO_ANGLE_OFFSET_WRITE, 18
-    // TODO-DW : read_angle_offset / SERVO_ANGLE_OFFSET_READ, 19
-    // TODO-DW : set_angle_limit / SERVO_ANGLE_LIMIT_WRITE, 20
-    // TODO-DW : read_angle_limit / SERVO_ANGLE_LIMIT_READ, 21
-    // TODO-DW : set_vin_limit_mv / SERVO_VIN_LIMIT_WRITE, 22
-    // TODO-DW : read_vin_limit_mv / SERVO_VIN_LIMIT_READ, 23
-    // TODO-DW : set_temp_limit_c / SERVO_TEMP_MAX_LIMIT_WRITE, 24
-    // TODO-DW : read_temp_limit_c / SERVO_TEMP_MAX_LIMIT_READ, 25
+    pub fn set_angle_offset(&self, offset: i8) -> Result<(), Error> {
+        const SERVO_ANGLE_OFFSET_ADJUST: u8 = 17;
+
+        if (offset < -125) || (offset > 125) {
+            return Err(Error::new(ErrorKind::InvalidData, "Offset out of range -125 to 125"))
+        }
+
+        let params = [offset as u8];
+        self.write(self.id, SERVO_ANGLE_OFFSET_ADJUST, &params)?;
+
+        Ok(())
+    }
+
+    pub fn save_angle_offset(&self) -> Result<(), Error> {
+        const SERVO_ANGLE_OFFSET_WRITE: u8 = 18;
+
+        let params = [];
+        self.write(self.id, SERVO_ANGLE_OFFSET_WRITE, &params)?;
+
+        Ok(())
+    }
+
+    pub fn read_angle_offset(&self) -> Result<u8, Error> {
+        const SERVO_ANGLE_OFFSET_READ: u8 = 19;
+
+        let mut rx_buf = [0; 32];
+        let params = [];
+        let response = self.read(self.id, SERVO_ANGLE_OFFSET_READ, &params, &mut rx_buf, 1)?;
+
+        Ok(response[0])
+    }
+
+    pub fn set_angle_limit(&self, minimum: u16, maximum: u16) -> Result<(), Error> {
+        const SERVO_ANGLE_LIMIT_WRITE: u8 = 20;
+
+        let mut params = [0_u8; 4];
+        LittleEndian::write_u16(&mut params[0..2], minimum);
+        LittleEndian::write_u16(&mut params[2..4], maximum);
+        self.write(self.id, SERVO_ANGLE_LIMIT_WRITE, &params)?;
+
+        Ok(())
+    }
+
+    pub fn read_angle_limit(&self) -> Result<(u16, u16), Error> {
+        const SERVO_ANGLE_LIMIT_READ: u8 = 21;
+
+        let mut rx_buf = [0; 32];
+        let params = [];
+        let response = self.read(self.id, SERVO_ANGLE_LIMIT_READ, &params, &mut rx_buf, 4)?;
+        let minimum = LittleEndian::read_u16(&response[0..2]);
+        let maximum = LittleEndian::read_u16(&response[2..4]);
+
+        Ok((minimum, maximum))
+    }
+
+    pub fn set_vin_limit_mv(&self, minimum: u16, maximum: u16) -> Result<(), Error> {
+        const SERVO_VIN_LIMIT_WRITE: u8 = 22;
+
+        if (minimum < 4500) || (minimum > 12000) {
+            return Err(Error::new(ErrorKind::InvalidInput, "minimum must be in range 4500-12000 mV"));
+        }
+        if (maximum < 4500) || (maximum > 12000) {
+            return Err(Error::new(ErrorKind::InvalidInput, "maximum must be in range 4500-12000 mV"));
+        }
+        if minimum >= maximum {
+            return Err(Error::new(ErrorKind::InvalidInput, "minimum must be less than maximum"));
+        }
+
+        let mut params = [0_u8; 4];
+        LittleEndian::write_u16(&mut params[0..2], minimum);
+        LittleEndian::write_u16(&mut params[2..4], maximum);
+        self.write(self.id, SERVO_VIN_LIMIT_WRITE, &params)?;
+
+        Ok(())
+    }
+
+    pub fn read_vin_limit_mv(&self) -> Result<(u16, u16), Error> {
+        const SERVO_VIN_LIMIT_READ: u8 = 23;
+
+        let mut rx_buf = [0; 32];
+        let params = [];
+        let response = self.read(self.id, SERVO_VIN_LIMIT_READ, &params, &mut rx_buf, 4)?;
+        let minimum = LittleEndian::read_u16(&response[0..2]);
+        let maximum = LittleEndian::read_u16(&response[2..4]);
+
+        Ok((minimum, maximum))
+    }
+
+    pub fn set_temp_limit_c(&self, limit_c: u8) -> Result<(), Error> {
+        const SERVO_TEMP_MAX_LIMIT_WRITE: u8 = 24;
+
+        if (limit_c < 50) || (limit_c > 85) {
+            return Err(Error::new(ErrorKind::InvalidInput, "temp limit must be in range 50-85 mV"));
+        }
+
+        let params = [limit_c];
+        self.write(self.id, SERVO_TEMP_MAX_LIMIT_WRITE, &params)?;
+
+        Ok(())
+    }
+
+    pub fn read_temp_limit_c(&self) -> Result<u8, Error> {
+        const SERVO_TEMP_MAX_LIMIT_READ: u8 = 25;
+
+        let mut rx_buf = [0; 32];
+        let params = [];
+        let response = self.read(self.id, SERVO_TEMP_MAX_LIMIT_READ, &params, &mut rx_buf, 1)?;
+        let limit = response[0];
+
+        Ok(limit)
+    }
 
     pub fn read_temp_c(&self) -> Result<i8, Error> {
         const SERVO_TEMP_READ: u8 = 26;
@@ -183,31 +283,63 @@ impl<'a, T: Read+Write> Servo<'a, T> {
         Ok(response[0] as i8)
     }
 
-    pub fn read_vin_mv(&self) -> Result<i16, Error> {
+    pub fn read_vin_mv(&self) -> Result<u16, Error> {
         const SERVO_VIN_READ: u8 = 27;
 
         let mut rx_buf = [0; 32];
         let params = [];
         let response = self.read(self.id, SERVO_VIN_READ, &params, &mut rx_buf, 2)?;
 
-        Ok(LittleEndian::read_i16(&response[0..2]))
+        Ok(LittleEndian::read_u16(&response[0..2]))
     }
 
-    pub fn read_pos(&self) -> Result<i16, Error> {
+    pub fn read_pos(&self) -> Result<u16, Error> {
         const SERVO_POS_READ: u8 = 28;
 
         let mut rx_buf = [0; 32];
         let params = [];
         let response = self.read(self.id, SERVO_POS_READ, &params, &mut rx_buf, 2)?;
 
-        Ok(LittleEndian::read_i16(&response[0..2]))
+        Ok(LittleEndian::read_u16(&response[0..2]))
     }
 
-    // TODO-DW : set_mode / SERVO_OR_MOTOR_MODE_WRITE, 29  (Create enum of SERVO, SPEED(speed))
-    // TODO-DW : get_mode / SERVO_OR_MOTOR_MODE_READ, 30
-    // TODO-DW : set_powered / SERVO_LOAD_OR_UNLOAD_WRITE, 31
+    pub fn set_mode(&self, mode: Lx16aMode) -> Result<(), Error> {
+        const SERVO_OR_MOTOR_MODE_WRITE: u8 = 29;
 
-    #[allow(unused)]
+        let mut params = [0_u8; 4];
+        if let Lx16aMode::Speed(speed) = mode {
+            params[0] = 1;  // motor control mode
+            LittleEndian::write_i16(&mut params[2..4], speed);
+        }
+        else {
+            // For Servo mode, params should all be 0, which they already are.
+        }
+
+        println!("Writing mode as {:02x} {:02x} {:02x} {:02x}", params[0], params[1], params[2], params[3]);
+        self.write(self.id, SERVO_OR_MOTOR_MODE_WRITE, &params)?;
+
+        Ok(())
+    }
+
+    pub fn read_mode(&self) -> Result<Lx16aMode, Error> {
+        const SERVO_OR_MOTOR_MODE_READ: u8 = 30;
+
+        let mut rx_buf = [0; 32];
+        let params = [];
+        let response = self.read(self.id, SERVO_OR_MOTOR_MODE_READ, &params, &mut rx_buf, 4)?;
+
+        match response[0] {
+            0 => Ok(Lx16aMode::Servo),
+            1 => {
+                let speed = LittleEndian::read_i16(&response[2..4]);
+                Ok(Lx16aMode::Speed(speed))
+            }
+            _ => {
+                Err(Error::new(std::io::ErrorKind::InvalidData, format!("Invalid mode, {}", response[0])))
+            }
+        }
+    }
+
     pub fn set_powered(&self, powered: bool) -> Result<(), Error> {
         const SERVO_LOAD_OR_UNLOAD_WRITE: u8 = 31;
 
@@ -222,11 +354,83 @@ impl<'a, T: Read+Write> Servo<'a, T> {
         Ok(())
     }
 
-    // TODO-DW : read_powered / SERVO_LOAD_OR_UNLOAD_READ, 32
-    // TODO-DW : set_led / SERVO_LED_CTRL_WRITE, 33
-    // TODO-DW : read_led / SERVO_LED_CTRL_READ, 34
-    // TODO-DW : set_led_err / SERVO_LED_ERROR_WRITE, 35
-    // TODO-DW : read_led_err / SERVO_LED_ERROR_READ, 36
+    pub fn read_powered(&self) -> Result<bool, Error> {
+        const SERVO_LOAD_OR_UNLOAD_READ: u8 = 32;
+
+        let mut rx_buf = [0; 32];
+        let params = [];
+        let response = self.read(self.id, SERVO_LOAD_OR_UNLOAD_READ, &params, &mut rx_buf, 1)?;
+
+        match response[0] {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(Error::new(std::io::ErrorKind::InvalidData, format!("Invalid powered state {}", response[0])))
+        }
+    }
+
+    // Note: The LX-16A protocol uses 0 to represent LED ON and 1 to represent OFF.
+    // But this API uses true for on, false for off.
+    pub fn set_led(&self, on: bool) -> Result<(), Error> {
+        const SERVO_LED_CTRL_WRITE: u8 = 33;
+
+        let led_state: u8 = match on { 
+            false => 1,
+            true => 0,
+        };
+
+        let params = [led_state];
+        self.write(self.id, SERVO_LED_CTRL_WRITE, &params)?;
+
+        Ok(())
+    }
+
+    pub fn read_led(&self) -> Result<bool, Error> {
+        const SERVO_LED_CTRL_READ: u8 = 34;
+
+        let mut rx_buf = [0; 32];
+        let params = [];
+        let response = self.read(self.id, SERVO_LED_CTRL_READ, &params, &mut rx_buf, 1)?;
+
+        match response[0] {
+            0 => Ok(true),   // 0 is on
+            1 => Ok(true),   // 1 is off
+            _ => Err(Error::new(std::io::ErrorKind::InvalidData, format!("Invalid led state {}", response[0])))
+        }
+    }
+
+    pub fn set_led_err(&self, over_temp: bool, over_voltage: bool, locked_rotor: bool) -> Result<(), Error> {
+        const SERVO_LED_ERROR_WRITE: u8 = 35;
+
+        let mut led_err_state: u8 = 0;
+        if over_temp { 
+            led_err_state |= 1; 
+        }
+        if over_voltage { 
+            led_err_state |= 2; 
+        }
+        if locked_rotor { 
+            led_err_state |= 4; 
+        }
+
+        let params = [led_err_state];
+        self.write(self.id, SERVO_LED_ERROR_WRITE, &params)?;
+
+        Ok(())
+    }
+
+    pub fn read_led_err(&self) -> Result<(bool, bool, bool), Error> {
+        const SERVO_LED_ERROR_READ: u8 = 36;
+
+        let mut rx_buf = [0; 32];
+        let params = [];
+        let response = self.read(self.id, SERVO_LED_ERROR_READ, &params, &mut rx_buf, 1)?;
+
+        let over_temp = (response[0] & 1) == 1;
+        let over_voltage = (response[0] & 2) == 2;
+        let locked_rotor = (response[0] & 4) == 4;
+
+        Ok((over_temp, over_voltage, locked_rotor))
+    }
 
     // --- Utility methods --------------------------------------------
     
@@ -281,14 +485,14 @@ impl<'a, T: Read+Write> Servo<'a, T> {
 
         // Validate response: header, id, length, cmd, checksum
         if Self::checksum(&rx_buf[2..resp_len]) != 0_u8 {
-            Err(Error::new(InvalidData, "Checksum error"))
+            Err(Error::new(ErrorKind::InvalidData, "Checksum error"))
         }
         else if (rx_buf[0] != 0x55) ||
            (rx_buf[1] != 0x55) ||
            (rx_buf[2] != id) ||
            (rx_buf[3] != 3_u8 + params_len as u8) ||
            (rx_buf[4] != cmd) {
-            Err(Error::new(InvalidData, "Bad response"))
+            Err(Error::new(ErrorKind::InvalidData, "Bad response"))
         }
         else {
             Ok(&rx_buf[5..5+params_len])
@@ -304,7 +508,7 @@ mod tests {
 
     #[test]
     fn it_works() {
-        let result = add(2, 2);
+        let result = 2+2;
         assert_eq!(result, 4);
     }
 }
